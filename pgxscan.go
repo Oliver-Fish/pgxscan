@@ -68,6 +68,35 @@ func QueryRow(ctx context.Context, tx querier, input interface{}, query string, 
 			return fmt.Errorf("query returned column %s that is missing from passed struct", string(header.Name))
 		}
 
+		//Check if we are doing a nested lookup
+		if len(fieldPos) > 1 {
+			currentStruct := structVal
+			//Check if path to field we want is safe, i.e no nil pointers
+			for i := 0; i <= len(fieldPos)-2; i++ {
+				if currentStruct.Kind() == reflect.Ptr {
+					currentStruct = currentStruct.Elem()
+				}
+				pos := fieldPos[i]
+				innerValue := currentStruct.FieldByIndex([]int{pos})
+				//If we aren't dealing with pointers then we are safe so do nothing
+				if innerValue.Kind() != reflect.Ptr {
+					continue
+				}
+				if !innerValue.CanAddr() {
+					return errors.New("unable to get address of field ")
+				}
+
+				if innerValue.IsNil() {
+					innerValue.Set(reflect.New(innerValue.Type().Elem()))
+				}
+
+				//safe path
+				currentStruct = innerValue
+				continue
+
+			}
+		}
+
 		//Below we get a pointer to each field matching a header returned from the query
 		//This allows us to directly update the field in requires structs without touching data we shouldn't
 		fieldVal := structVal.FieldByIndex(fieldPos)
@@ -137,6 +166,9 @@ func Rows(rows pgx.Rows, input interface{}) error {
 		//We have to work with the existing values and destroy the original dataset
 		//If the query returns more rows than our slice already has we will error
 		err = scanToExistingSlice(rows, rt, rv, dbTagPos)
+		if err != nil {
+			return err
+		}
 	} else {
 
 		//Slice is empty so we can freely add values to the slice
@@ -325,6 +357,23 @@ func getDBTagPositions(rt reflect.Type) (map[string][]int, error) {
 				tagPositions[t] = append([]int{i}, ni...)
 			}
 
+		case reflect.Ptr:
+			underlineType := field.Type.Elem()
+			if underlineType.Kind() == reflect.Struct {
+				//Get all tags on nested struct
+				nestedTags, err := getDBTagPositions(underlineType)
+				if err != nil {
+					return nil, err
+				}
+
+				//Add all nested positions to top level map
+				for t, ni := range nestedTags {
+					tagPositions[t] = append([]int{i}, ni...)
+				}
+				continue
+			}
+			//If we have a pointer that doesn't point to a struct then we don't need to look deeper
+			fallthrough
 		default:
 			tag := field.Tag.Get("db")
 			//If we find a case where no tag is set return error
