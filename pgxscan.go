@@ -358,6 +358,17 @@ func getDBTagPositions(rt reflect.Type) (map[string][]int, error) {
 			}
 
 		case reflect.Ptr:
+			tag := field.Tag.Get("db")
+			if tag == "-" {
+				//If an embeded struct has a ignore db tag
+				//skip entire struct lookup, in this case we shouldn't have a tag
+				continue
+			}
+			if tag != "" {
+				//Tag Found so add it to the list and don't go deeper
+				tagPositions[tag] = field.Index
+				continue
+			}
 			underlineType := field.Type.Elem()
 			if underlineType.Kind() == reflect.Struct {
 				//Get all tags on nested struct
